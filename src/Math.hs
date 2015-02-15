@@ -9,8 +9,10 @@ journeyTime = V.length
 journeyDist :: V.Vector (Int,Int) -> Double
 journeyDist = mag . V.last
 
-velocities :: V.Vector (Int,Int) -> V.Vector (Int,Int)
-velocities positions = undefined
+differentiate :: V.Vector (Int,Int) -> V.Vector (Int,Int)
+differentiate v =
+  let v' = V.drop 1 v
+  in V.zipWith disp v v'
 
 ---------------
 
