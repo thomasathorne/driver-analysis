@@ -5,12 +5,17 @@ module Reader where
 import qualified Data.ByteString.Lazy.Char8 as L
 import qualified Data.Vector.Unboxed as V
 
+dataPath = "/home/thomas/Projects/personal/drivers/resources/drivers/"
+journeyPath d n = dataPath ++ d ++ "/" ++ show n ++ ".csv"
+
+getJourney :: String -> Int -> IO (V.Vector (Int, Int))
+getJourney d n = readJourney $ journeyPath d n
 
 readJourney :: FilePath -> IO (V.Vector (Int, Int))
 readJourney path = do
   s' <- L.readFile path
   let (_ ,s) = readLine s'
-  return $! parse s
+  return $ parse s
 
 parse = V.unfoldr step
   where step s = case readLine s of
