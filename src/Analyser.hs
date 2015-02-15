@@ -12,12 +12,20 @@ import System.Directory (getDirectoryContents)
 import Data.String (IsString(fromString))
 
 
+avgAccel :: V.Vector (Int,Int) -> Double
+avgAccel v =
+  let vel = differentiate v
+      accel = V.map mag $ differentiate vel
+  in (*0.1) $ (V.sum accel) / fromIntegral (V.length accel)
+
+
+
 main = do ds <- getDirectoryContents dataPath <&> drop 2 <&> take 54 -- 2% of total
           flip traverse ds $ \d -> driver d 1
   where
     driver d n | n > 200 = return ()
                | otherwise = do !j <- getJourney d n
                                 L.putStrLn $ L.pack $ d ++ "_" ++ show n ++ "," ++
-                                  show (journeyDist j)
+                                  show (avgAccel j)
                                 driver d $ n+1
       
