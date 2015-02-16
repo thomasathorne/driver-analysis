@@ -25,8 +25,9 @@ main = do ds <- getDirectoryContents dataPath <&> drop 2 <&> take 54 -- 2% of to
           flip traverse ds $ \d -> driver d 1
   where
     driver d n | n > 200 = return ()
-               | otherwise = do !j <- getJourney d n
+               | otherwise = do j <- getJourney d n
                                 L.putStrLn $ L.pack $ d ++ "_" ++ show n ++ "," ++
-                                  show (avgAccel j)
+                                  show (avgAccel j) ++ "," ++ show (V.length j) ++ "," ++
+                                  show (journeyDist j)
                                 driver d $ n+1
       
