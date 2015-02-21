@@ -12,12 +12,12 @@ import System.Directory (getDirectoryContents)
 import Data.String (IsString(fromString))
 
 
-avgAccel :: V.Vector (Int,Int) -> Double
+avgAccel :: V.Vector (Double,Double) -> Double
 avgAccel v =
   let vel = differentiate v
       accel = V.map mag $ differentiate vel
-      cleaned = V.filter (< 70.0) accel
-  in (*0.1) $ (V.sum cleaned) / fromIntegral (V.length cleaned)
+      cleaned = V.filter (< 7.0) accel
+  in (V.sum cleaned) / fromIntegral (V.length cleaned)
 
 
 
