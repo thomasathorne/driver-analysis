@@ -1,44 +1,146 @@
+{-# LANGUAGE BangPatterns #-}
 
 module Main where
 
 import Reader
+import Math
 
 import Graphics.Rasterific
 import Graphics.Rasterific.Texture
 import Codec.Picture( PixelRGBA8(..), writePng, Image )
 import qualified Data.Vector.Unboxed as V
 import Control.Applicative
+import System.Directory
+import Control.Lens ((<&>),(&))
+import Data.Array.IO
+import Data.Array.MArray
 
 black = PixelRGBA8 0 0 0 255
 blue = PixelRGBA8 0 0 255 80
 green = PixelRGBA8 0 255 0 80
 red = PixelRGBA8 255 0 0 80
+white = PixelRGBA8 255 255 255 80
+logColour base r g b = PixelRGBA8 (floor (100*(logBase base (fromIntegral r+1))))
+                       (floor (100*(logBase base (fromIntegral g+1))))
+                       (floor (100*(logBase base (fromIntegral b+1))))
+                       255
 
-renderJourney :: (Float,Float) -> Float -> V.Vector (Int,Int) -> Drawing px ()
+float :: Double -> Float
+float = fromRational.toRational
+
+asPoint :: (Double,Double) -> Point
+asPoint (a,b) = V2 (float a) (float b)
+
+renderJourney :: (Double,Double) -> Double -> V.Vector (Double,Double) -> Drawing px ()
 renderJourney (x,y) scale v =
-  let scaled = V.map (\(a,b) -> (x + (fromIntegral a/scale), y + (fromIntegral b/scale))) v
-      v2s = map (\(a,b) -> (V2 a b)) $ V.toList scaled
+  let scaled = V.map (\(a,b) -> (a/scale, b/scale)) v
+      (a,b) = V.last scaled
+      m = mag (a,b)
+      rotation = (a/m, -b/m)
+      rotated = V.map (rotate rotation) scaled
+      translated = V.map (\(a,b) -> (x+a, y+b)) rotated
+      v2s = map asPoint $ V.toList translated
       v2s' = tail v2s
       primitives = LinePrim <$> zipWith Line v2s v2s'
   in stroke 0.5 JoinRound (CapRound, CapRound) primitives
 
-main = do
-  journeys <- mapM (getJourney "3000") [1..200]
-  journeys' <- mapM (getJourney "3") [1..200]
-  journeys'' <- mapM (getJourney "2000") [1..200] 
+threeDriversImage :: String -> String -> String -> IO (Image PixelRGBA8)
+threeDriversImage a b c = do
+  journeys <- mapM (getJourney a) [1..200]
+  journeys' <- mapM (getJourney b) [1..200]
+  journeys'' <- mapM (getJourney c) [1..200] 
   let scales = map (\j -> max (V.maximum (V.map fst j)) (V.maximum (V.map snd j))) journeys
       scales' = map (\j -> max (V.maximum (V.map fst j)) (V.maximum (V.map snd j))) journeys'
       scales'' = map (\j -> max (V.maximum (V.map fst j)) (V.maximum (V.map snd j))) journeys''
-      scale = fromIntegral (maximum scales) / 450
-      scale' = fromIntegral (maximum scales) / 450
-      scale'' = fromIntegral (maximum scales) / 450  
+      scale = maximum scales / 400
+      scale' = maximum scales / 400
+      scale'' = maximum scales / 400  
       scl = scale `max` scale' `max` scale''
-      img = renderDrawing 1000 1000 black $ do
-              withTexture (uniformTexture red) $
-                mapM_ (renderJourney (500,500) scale) journeys
-              withTexture (uniformTexture green) $
-                mapM_ (renderJourney (500,500) scale) journeys'
-              withTexture (uniformTexture blue) $
-                mapM_ (renderJourney (500,500) scale) journeys''
+  return $ renderDrawing 1000 1000 black $ do
+    withTexture (uniformTexture red) $
+      mapM_ (renderJourney (100,200) scale) journeys
+    withTexture (uniformTexture green) $
+      mapM_ (renderJourney (100,500) scale) journeys'
+    withTexture (uniformTexture blue) $
+      mapM_ (renderJourney (100,800) scale) journeys''
 
-  writePng "/home/thomas/Projects/personal/drivers/resources/journeys.png" img
+drawLine (a,b) (c,d) = do
+  stroke 1 JoinRound (CapRound, CapRound)
+      [LinePrim $ Line (V2 a b) (V2 c d)]
+
+plotDriver :: IOUArray (Int,Int) Int -> IOUArray (Int,Int) Int
+              -> IOUArray (Int,Int) Int -> String -> IO ()
+plotDriver p1 p2 p3 s = do
+  journeys <- mapM (getJourney s) [1..200]
+  mapM_ (fountainPlot p1 p2 p3) journeys
+
+plotHelperLines = withTexture (uniformTexture white) $ do
+  drawLine (200,800) (0,800)
+  drawLine (400, 800) (400, 900)
+  drawLine (600, 800) (600, 900)
+  drawLine (800, 800) (800, 900)
+
+fountainPlot :: IOUArray (Int,Int) Int -> IOUArray (Int,Int) Int
+                -> IOUArray (Int,Int) Int -> V.Vector (Double,Double) -> IO ()
+fountainPlot rplot gplot bplot journey = do
+  let speeds = V.map mag $ differentiate journey
+      plus1 = V.drop 1 journey
+      plus2 = V.drop 2 journey
+      plus3 = V.drop 3 journey
+      plus4 = V.drop 4 journey
+      allTogether = V.zip6 journey speeds plus1 plus2 plus3 plus4
+      filtered = flip V.filter allTogether $ \(_,s,_,_,_,_) -> s > 20 && s < 30
+      dot (p0, s, p1, p2, p3, p4) =
+        let vel = disp p0 p1
+            step1 = disp p1 p2
+            step2 = disp p1 p3
+            step3 = disp p1 p4
+        in (rotate (inverse vel) step1 & upperHalf & rotate (20,0),
+            rotate (inverse vel) step2 & upperHalf & rotate (20,0),
+            rotate (inverse vel) step3 & upperHalf & rotate (20,0))
+      (rs,gs,bs) = V.unzip3 $ V.map dot filtered
+  cloudPlot rplot rs
+  cloudPlot gplot gs
+  cloudPlot bplot bs
+
+cloudPlot :: IOUArray (Int,Int) Int -> V.Vector (Double,Double) -> IO ()
+cloudPlot plot dots = V.forM_ dots $ addToPlot plot
+
+addToPlot :: IOUArray (Int,Int) Int -> (Double,Double) -> IO ()
+addToPlot plot (x,y) = do
+  let (a,b) = (floor x, floor y)
+  if a <= 80 && a >= 0 && b <= 80 && b >= 0
+    then do n <- readArray plot (a,b)
+            writeArray plot (a,b) $ n+1
+    else return ()
+
+runPlots :: IOUArray (Int,Int) Int -> IOUArray (Int,Int) Int
+            -> IOUArray (Int,Int) Int -> IO (Image PixelRGBA8)
+runPlots r g b = do
+  rs <- getAssocs r
+  gs <- getAssocs g
+  bs <- getAssocs b
+  let irgbs = zipWith3 (\(i,rn) (_,gn) (_,bn) -> (i,rn,gn,bn)) rs gs bs
+      
+  writeFile "/home/thomas/Projects/personal/drivers/resources/prob_dist.dat" $ show irgbs
+  
+  return $ renderDrawing 1000 1000 black $ do
+    flip mapM_ irgbs $ \((x,y),r',g',b') -> do
+      let p = V2 (fromIntegral (200 + 10 * x)) (fromIntegral (790 - 10 * y))
+      withTexture (uniformTexture $ logColour 1000 r' g' b') $
+        fill $ rectangle p 10 10
+    plotHelperLines
+
+main = do
+  rplot <- newArray ((0,0),(80,80)) 0 :: IO (IOUArray (Int,Int) Int)
+  gplot <- newArray ((0,0),(80,80)) 0 :: IO (IOUArray (Int,Int) Int)
+  bplot <- newArray ((0,0),(80,80)) 0 :: IO (IOUArray (Int,Int) Int)
+
+  ds <- getDirectoryContents dataPath <&> drop 2 -- all!
+  
+  flip mapM_ ds $ \d -> do
+    plotDriver rplot gplot bplot d
+    putStrLn $ "driver " ++ d
+
+  img <- runPlots rplot gplot bplot
+  writePng "/home/thomas/Projects/personal/drivers/resources/fountain" img
