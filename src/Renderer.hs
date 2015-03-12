@@ -14,6 +14,12 @@ import System.Directory
 import Control.Lens ((<&>),(&))
 import Data.Array.IO
 import Data.Array.MArray
+import Control.Concurrent
+import Control.Concurrent.ParallelIO
+import Control.Concurrent.STM
+
+speedRange :: Double -> Bool
+speedRange s = s > 35 && s < 40
 
 black = PixelRGBA8 0 0 0 255
 blue = PixelRGBA8 0 0 255 80
@@ -70,9 +76,8 @@ drawLine (a,b) (c,d) = do
 
 plotDriver :: IOUArray (Int,Int) Int -> IOUArray (Int,Int) Int
               -> IOUArray (Int,Int) Int -> String -> IO ()
-plotDriver p1 p2 p3 s = do
-  journeys <- mapM (getJourney s) [1..200]
-  mapM_ (fountainPlot p1 p2 p3) journeys
+plotDriver p1 p2 p3 s =
+  flip mapM_ [1..200] $ \n -> n & getJourney s >>= fountainPlot p1 p2 p3
 
 plotHelperLines = withTexture (uniformTexture white) $ do
   drawLine (200,800) (0,800)
@@ -89,7 +94,7 @@ fountainPlot rplot gplot bplot journey = do
       plus3 = V.drop 3 journey
       plus4 = V.drop 4 journey
       allTogether = V.zip6 journey speeds plus1 plus2 plus3 plus4
-      filtered = flip V.filter allTogether $ \(_,s,_,_,_,_) -> s > 20 && s < 30
+      filtered = flip V.filter allTogether $ \(_,s,_,_,_,_) -> speedRange s
       dot (p0, s, p1, p2, p3, p4) =
         let vel = disp p0 p1
             step1 = disp p1 p2
@@ -131,16 +136,53 @@ runPlots r g b = do
         fill $ rectangle p 10 10
     plotHelperLines
 
-main = do
+accDrivers :: TChan String -> [String] ->
+              IO (IOUArray (Int,Int) Int,IOUArray (Int,Int) Int,IOUArray (Int,Int) Int)
+accDrivers msgChan ds = do
   rplot <- newArray ((0,0),(80,80)) 0 :: IO (IOUArray (Int,Int) Int)
   gplot <- newArray ((0,0),(80,80)) 0 :: IO (IOUArray (Int,Int) Int)
   bplot <- newArray ((0,0),(80,80)) 0 :: IO (IOUArray (Int,Int) Int)
-
-  ds <- getDirectoryContents dataPath <&> drop 2 -- all!
   
   flip mapM_ ds $ \d -> do
     plotDriver rplot gplot bplot d
-    putStrLn $ "driver " ++ d
+    atomically $ writeTChan msgChan $ "driver " ++ d
 
-  img <- runPlots rplot gplot bplot
-  writePng "/home/thomas/Projects/personal/drivers/resources/fountain" img
+  return (rplot, gplot, bplot)
+  
+
+listen :: TChan String -> Int -> IO ()
+listen chan n = do
+  s <- atomically $ readTChan chan
+  putStrLn $ s ++ "  (number " ++ show n ++ ")"
+  listen chan $ n+1
+
+addArrays :: [IOUArray (Int,Int) Int] -> IO (IOUArray (Int,Int) Int)
+addArrays ars = do
+  sums <- newArray ((0,0),(80,80)) 0 :: IO (IOUArray (Int,Int) Int)
+  flip mapM_ [1..80] $ \x ->
+    flip mapM_ [1..80] $ \y -> do
+      ns <- flip mapM ars $ \a -> readArray a (x,y)
+      writeArray sums (x,y) (sum ns)
+  return sums
+
+cutUpList :: [a] -> Int -> [[a]]
+cutUpList as 1 = [as]
+cutUpList as n =
+  let m = length as `div` n
+  in take m as : cutUpList (drop m as) (n-1)
+
+main = do
+  ds <- getDirectoryContents dataPath <&> drop 2
+  let dds = cutUpList ds 4
+  
+  chan <- atomically newTChan
+
+  forkIO $ listen chan 1
+  (rs,gs,bs) <- unzip3 <$> parallel (map (accDrivers chan) dds)
+
+  r <- addArrays rs
+  g <- addArrays gs
+  b <- addArrays bs
+  
+  img <- runPlots r g b
+  writePng "/home/thomas/Projects/personal/drivers/resources/fountain35-40.png" img
